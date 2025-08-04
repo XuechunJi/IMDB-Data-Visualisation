@@ -23,3 +23,4 @@ Design Choice 2: Decision Definition: Select the most effective method for users
   - The interval brush enables comprehensive multi-object selection, dynamically updating linked views (the ratings bar chart and the contributor tables) and enhancing exploratory analysis.
   - This hybrid interaction aligns with the “overview first, zoom and filter, details on demand” principle, providing adaptability and reducing cognitive load.
   - Empirical studies (e.g., Becker & Cleveland) support the flexibility of such combined strategies over purely click or purely hover interactions.
+<img width="1458" height="785" alt="visual" src="https://github.com/user-attachments/assets/4b495ff5-e433-4035-82d4-733cd3f0d702" />
