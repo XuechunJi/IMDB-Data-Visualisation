@@ -1,0 +1,179 @@
+import pandas as pd
+import altair as alt
+import IPython
+from google.colab import files
+
+# Enable Altair large dataset support
+alt.data_transformers.enable("default", max_rows=None)
+
+# Load data
+data = files.upload()
+df = pd.read_csv('imdb_cleaned_finalv1.csv')
+
+# Ensure numeric columns are properly formatted
+for col in ['Rating', 'budget', 'grossWorldWide', 'Year']:
+    df[col] = pd.to_numeric(df[col], errors='coerce')
+
+# Remove rows with missing essential data
+df = df.dropna(subset=['directors', 'production_companies', 'Year', 'grossWorldWide'])
+
+# Clean 'grossWorldWide' column: replace negative and zero values with NaN
+df['grossWorldWide'] = df['grossWorldWide'].apply(lambda x: x if x > 0 else None)
+
+# Drop rows with NaN in 'grossWorldWide'
+df = df.dropna(subset=['grossWorldWide'])
+
+# Filter data from year 2000 onward
+df_filtered = df[df['Year'] > 1999].copy()
+
+# Ensure 'writers' and 'stars' columns are strings and handle missing values
+df_filtered['writers'] = df_filtered['writers'].fillna('Unknown Writer').astype(str)
+df_filtered['stars'] = df_filtered['stars'].fillna('Unknown Star').astype(str)
+
+# Split 'writers' and 'stars' into lists using '|' as the separator
+df_filtered['writers'] = df_filtered['writers'].str.split('|')
+df_filtered['stars'] = df_filtered['stars'].str.split('|')
+
+# Explode 'writers' and 'stars' into separate rows
+df_exploded_writers = df_filtered.explode('writers')
+df_exploded_stars = df_filtered.explode('stars')
+
+# Group by movie and calculate total grossWorldWide revenue
+movie_revenue = df_filtered.groupby('Title')['grossWorldWide'].sum().reset_index()
+
+# Merge director, production company, and year information back to the movie revenue data
+movie_revenue = movie_revenue.merge(
+    df_filtered[['Title', 'directors', 'production_companies', 'Year']].drop_duplicates(),
+    on='Title',
+    how='left'
+)
+
+# Extract unique years for the dropdown menu
+unique_years = sorted(df_filtered['Year'].unique())
+if not unique_years:
+    raise ValueError("No movies found with Year > 2000. Check dataset.")
+
+# Create the year dropdown binding
+year_dropdown = alt.binding_select(options=unique_years, name='Release Year:')
+year_param = alt.param(name='selectedYear', bind=year_dropdown, value=unique_years[0])
+
+# Create a slider for selecting the number of top movies
+top_movies_slider = alt.binding_range(min=10, max=50, step=1, name='Number of Top Movies:')
+top_movies_param = alt.param(name='topMovies', bind=top_movies_slider, value=20)  # Default to top 20
+
+# Create a selection for the scatterplot circles
+selection = alt.selection_point(fields=['Title'], on='click', empty=False)
+# Create a brush selection for the scatterplot
+brush = alt.selection_interval(encodings=['x', 'y'], empty=False)  # Brush selection
+
+# Create the scatter plot chart with dynamic year filter
+scatterplot = alt.Chart(movie_revenue).transform_filter(
+    alt.datum.Year == year_param  # Dynamic filtering based on the selected year parameter
+).transform_window(
+    rank='rank(grossWorldWide)',
+    sort=[alt.SortField('grossWorldWide', order='descending')]
+).transform_filter(
+    alt.datum.rank <= top_movies_param  # Dynamic filtering based on the slider value
+).mark_circle(size=100).encode(
+    x=alt.X('directors:N', title='Directors', axis=alt.Axis(labelAngle=330)),
+    y=alt.Y('production_companies:N', title='Production Company'),
+    size=alt.Size('grossWorldWide:Q', legend=None, scale=alt.Scale(range=[50, 500])),
+    color=alt.Color('grossWorldWide:Q', scale=alt.Scale(scheme='blues'), legend=None),
+    tooltip=[
+        alt.Tooltip('Title:N', title='Movie Title'),
+        alt.Tooltip('directors:N', title='Director'),
+        alt.Tooltip('production_companies:N', title='Production Company'),
+        alt.Tooltip('grossWorldWide:Q', title='WorldWide Box Office', format='$.2f')
+    ],
+    opacity=alt.condition(selection, alt.value(1), alt.value(0.7))  # Highlight selected circle
+).add_params(
+    year_param,  # Add the year dropdown parameter to the chart
+    top_movies_param,  # Add the slider parameter
+    selection,  # Add the selection parameter
+    brush  # Add the brush selection
+).properties(
+    width=600,
+    height=400,
+title=alt.TitleParams(text='Top 50 Movies by WorldWide Box Office', fontSize=20)
+)
+
+# Create a bar chart to show the ratings of the selected movies
+rating_chart = alt.Chart(df).transform_filter(
+    brush  # Filter based on the brush selection
+).mark_bar().encode(
+    y=alt.Y('Title:N', title='Movie Title', axis=alt.Axis(labelAngle=0)),  # Swap x and y
+    x=alt.X('Rating:Q', title='Rating'),  # Swap x and y
+    color=alt.Color('Rating:Q', scale=alt.Scale(scheme='plasma')),  # Use a built-in color scheme
+    tooltip=[
+        alt.Tooltip('Title:N', title='Movie Title'),
+        alt.Tooltip('Rating:Q', title='Rating', format='.2f')
+    ]
+).properties(
+    width=500,
+    height=180,
+    title=alt.TitleParams(text='Ratings of Selected Movies', fontSize=15)
+)
+
+# Create a table for writers
+writers_table = alt.Chart(df_exploded_writers).transform_filter(
+    selection  # Filter based on the selected movie
+).transform_window(
+    row_number='row_number()'  # Assign a unique row number to each writer
+).mark_rect(  # Add a background for the table
+    font='Roboto',
+    color='lightgray',
+    opacity=0.1,
+    stroke=None,
+    strokeWidth=0
+).encode(
+    y=alt.Y('row_number:O', axis=None, title=None, scale=alt.Scale(padding=10)),  # Use row number as y-axis
+).properties(
+    width=300,
+    title=alt.TitleParams(text='Writers', fontSize=15)
+) + alt.Chart(df_exploded_writers).transform_filter(
+    selection
+).transform_window(
+    row_number='row_number()'
+).mark_text(align='center',
+    baseline='middle', dx=10, dy=5,fontSize=14, lineHeight=15,).encode(
+    y=alt.Y('row_number:O', axis=None, title=None),
+    text=alt.Text('writers:N', title='Writers'),
+    color=alt.value('black')
+)
+
+
+# Create a table for stars
+stars_table = alt.Chart(df_exploded_stars).transform_filter(
+    selection  # Filter based on the selected movie
+).transform_window(
+    row_number='row_number()'  # Assign a unique row number to each star
+).mark_rect(  # Add a background for the table
+    font='Arial',
+    color='lightgray',
+    opacity=0.1,
+    stroke=None,
+    strokeWidth=0
+).encode(
+    y=alt.Y('row_number:O', axis=None, title=None, scale=alt.Scale(padding=10)),  # Use row number as y-axis
+).properties(
+    width=300,
+    title=alt.TitleParams(text='Stars', fontSize=15)
+) + alt.Chart(df_exploded_stars).transform_filter(
+    selection
+).transform_window(
+    row_number='row_number()'
+).mark_text(align='center', baseline='middle', dx=10, dy=5,fontSize=14, lineHeight=15,).encode(
+    y=alt.Y('row_number:O', axis=None, title=None),
+    text=alt.Text('stars:N', title='Stars'),
+    color=alt.value('#333333')
+)
+
+# Combine the scatterplot, writers table, and stars table
+combined_chart = (scatterplot & rating_chart | (writers_table | stars_table ) )
+
+# Configure the chart
+combined_chart = combined_chart.configure_axis(grid=True)
+
+# Display the final chart
+IPython.display.display(combined_chart)
+
